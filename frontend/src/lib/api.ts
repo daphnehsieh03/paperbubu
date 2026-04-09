@@ -1,0 +1,142 @@
+const base = () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+export type PaperStatus = "to_read" | "reading" | "completed";
+
+export type Paper = {
+  id: number;
+  title: string;
+  authors: string;
+  doi: string | null;
+  arxiv_id: string | null;
+  status: PaperStatus;
+  file_path: string | null;
+  created_at: string;
+  completed_at: string | null;
+  last_opened_at: string | null;
+  user_id: number;
+  keywords: { id: number; name: string }[];
+};
+
+export type HeatmapDay = { date: string; count: number };
+
+export type MeStats = {
+  total_read: number;
+  active_keyword_count: number;
+  top_keywords: { name: string; count: number }[];
+  recently_read: Paper[];
+  recently_opened: Paper[];
+};
+
+function authHeaders(token: string | null): HeadersInit {
+  const h: Record<string, string> = {};
+  if (token) h.Authorization = `Bearer ${token}`;
+  return h;
+}
+
+export async function apiJson<T>(
+  path: string,
+  opts: RequestInit & { token?: string | null } = {}
+): Promise<T> {
+  const { token, ...init } = opts;
+  const url = `${base()}${path.startsWith("/") ? path : `/${path}`}`;
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      ...authHeaders(token ?? null),
+      ...(init.headers as Record<string, string>),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let message = text || res.statusText;
+    try {
+      const body = JSON.parse(text) as { detail?: unknown };
+      if (typeof body.detail === "string") message = body.detail;
+      else if (Array.isArray(body.detail)) {
+        const first = body.detail[0];
+        if (first && typeof first === "object" && "msg" in first && typeof first.msg === "string") {
+          message = first.msg;
+        }
+      }
+    } catch {
+      /* use raw text */
+    }
+    throw new Error(message);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+export async function register(email: string, password: string) {
+  return apiJson<{ access_token: string }>("/v1/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function login(email: string, password: string) {
+  return apiJson<{ access_token: string }>("/v1/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function fetchPapers(
+  token: string,
+  params: { q?: string; status?: PaperStatus } = {}
+) {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.status) sp.set("status", params.status);
+  const q = sp.toString();
+  return apiJson<Paper[]>(`/v1/papers${q ? `?${q}` : ""}`, { token });
+}
+
+export async function createPaperFromUrl(token: string, url: string) {
+  return apiJson<Paper>("/v1/papers", {
+    method: "POST",
+    token,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+}
+
+export async function uploadPapers(token: string, files: File[]) {
+  const fd = new FormData();
+  for (const f of files) fd.append("file", f);
+  const res = await fetch(`${base()}/v1/papers`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: fd,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data as Paper | Paper[];
+}
+
+export async function patchPaper(token: string, id: number, body: Partial<{ status: PaperStatus; title: string; keyword_names: string[] }>) {
+  return apiJson<Paper>(`/v1/papers/${id}`, {
+    method: "PATCH",
+    token,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deletePaper(token: string, id: number) {
+  return apiJson<void>(`/v1/papers/${id}`, { method: "DELETE", token });
+}
+
+export async function markPaperOpen(token: string, id: number) {
+  return apiJson<Paper>(`/v1/papers/${id}/open`, { method: "POST", token });
+}
+
+export async function fetchHeatmap(token: string) {
+  return apiJson<{ days: HeatmapDay[] }>("/v1/me/heatmap", { token });
+}
+
+export async function fetchStats(token: string) {
+  return apiJson<MeStats>("/v1/me/stats", { token });
+}

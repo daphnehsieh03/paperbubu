@@ -32,6 +32,21 @@ class PaperKeyword(SQLModel, table=True):
     keyword_id: int = Field(foreign_key="keyword.id", primary_key=True)
 
 
+# ARCHITECTURE NOTE — Domain + Infrastructure blending
+# In an ideal separation, `Paper` would be a plain Python class (domain layer)
+# with no database knowledge: just fields, business rules, and state transitions.
+# A separate ORM class (infrastructure layer) would handle the SQLAlchemy mapping.
+#
+# SQLModel collapses both into one class as a deliberate convenience trade-off.
+# The blending is visible in three places:
+#   1. `table=True`          — turns this domain concept into a DB table definition
+#   2. `sa_column=Column(…)` — SQLAlchemy column types leaking into field declarations
+#   3. `Relationship(…)`     — ORM relationship machinery instead of plain Python references
+#
+# This is acceptable for a project of this size, but means:
+#   - You need a DB session to instantiate Paper in tests
+#   - Swapping the ORM would require touching business model code
+#   - DB schema concerns (column types, indexes) live next to business concerns (status, keywords)
 class Paper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str

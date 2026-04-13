@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Union
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import selectinload
-from sqlmodel import Session, col, select
+from sqlmodel import col, select
 
 from app.config import settings
 from app.deps import CurrentUser, SessionDep
-from app.models import DailyLog, Keyword, Paper, PaperKeyword, PaperStatus
-from app.models import CreatePaperUrlBody, PaperOut, PaperPatch
+from app.models import CreatePaperUrlBody, Keyword, Paper, PaperKeyword, PaperOut, PaperPatch, PaperStatus
 from app.services.metadata import parse_ids_from_url, resolve_metadata
-from app.services.paper_helpers import authors_to_str, build_search_document, safe_unlink_file
+from app.services.paper_helpers import authors_to_str, build_search_document
+from app.services.papers import (
+    create_paper,
+    delete_paper,
+    mark_paper_completed,
+    mark_paper_opened,
+    set_keywords,
+)
 from app.services.pdf import extract_ids_from_pdf
 
 router = APIRouter(prefix="/papers", tags=["papers"])
@@ -24,34 +29,6 @@ def _ensure_upload_dir() -> Path:
     p = Path(settings.upload_dir)
     p.mkdir(parents=True, exist_ok=True)
     return p
-
-
-def _create_paper_core(
-    session: Session,
-    user_id: int,
-    *,
-    title: str,
-    authors: str,
-    doi: str | None,
-    arxiv_id: str | None,
-    file_path: str | None,
-) -> Paper:
-    paper = Paper(
-        title=title,
-        authors=authors,
-        doi=doi,
-        arxiv_id=arxiv_id,
-        status=PaperStatus.to_read,
-        file_path=file_path,
-        user_id=user_id,
-        search_document=build_search_document(title, authors, doi, arxiv_id, None),
-    )
-    session.add(paper)
-    session.commit()
-    session.refresh(paper)
-    stmt = select(Paper).where(Paper.id == paper.id).options(selectinload(Paper.keywords))
-    paper = session.exec(stmt).one()
-    return paper
 
 
 @router.get("", response_model=list[PaperOut])
@@ -73,7 +50,7 @@ def list_papers(
 
 
 @router.post("", response_model=Union[PaperOut, list[PaperOut]])
-async def create_paper(
+async def create_paper_endpoint(
     request: Request,
     session: SessionDep,
     user: CurrentUser,
@@ -91,14 +68,9 @@ async def create_paper(
         try:
             meta = await resolve_metadata(doi, arxiv_id)
         except Exception:
-            meta = {
-                "title": "Imported paper",
-                "authors": [],
-                "doi": doi,
-                "arxiv_id": arxiv_id,
-            }
+            meta = {"title": "Imported paper", "authors": [], "doi": doi, "arxiv_id": arxiv_id}
         authors = authors_to_str(meta.get("authors") or [])
-        paper = _create_paper_core(
+        return create_paper(
             session,
             user.id,
             title=meta.get("title") or "Untitled",
@@ -107,7 +79,6 @@ async def create_paper(
             arxiv_id=meta.get("arxiv_id") or arxiv_id,
             file_path=None,
         )
-        return paper
 
     if not content_type.startswith("multipart/form-data"):
         raise HTTPException(
@@ -118,7 +89,10 @@ async def create_paper(
     form = await request.form()
     files = form.getlist("file")
     if not files:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file(s) in multipart form (use field name 'file')")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No file(s) in multipart form (use field name 'file')",
+        )
 
     upload_dir = _ensure_upload_dir()
     created: list[Paper] = []
@@ -128,10 +102,8 @@ async def create_paper(
             continue
         upload: UploadFile = uf  # type: ignore[assignment]
         suffix = Path(upload.filename or "paper.pdf").suffix or ".pdf"
-        name = f"{uuid.uuid4().hex}{suffix}"
-        dest = upload_dir / name
-        data = await upload.read()
-        dest.write_bytes(data)
+        dest = upload_dir / f"{uuid.uuid4().hex}{suffix}"
+        dest.write_bytes(await upload.read())
 
         doi_pdf, arxiv_pdf = extract_ids_from_pdf(dest)
         title = Path(upload.filename or "paper").stem
@@ -147,7 +119,7 @@ async def create_paper(
             except Exception:
                 pass
 
-        paper = _create_paper_core(
+        created.append(create_paper(
             session,
             user.id,
             title=title,
@@ -155,15 +127,12 @@ async def create_paper(
             doi=doi,
             arxiv_id=arxiv_id,
             file_path=str(dest.resolve()),
-        )
-        created.append(paper)
+        ))
 
     if not created:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid files uploaded")
 
-    if len(created) == 1:
-        return created[0]
-    return created
+    return created[0] if len(created) == 1 else created
 
 
 @router.get("/{paper_id}", response_model=PaperOut)
@@ -181,40 +150,15 @@ def get_paper(paper_id: int, session: SessionDep, user: CurrentUser) -> Paper:
 
 @router.post("/{paper_id}/open", response_model=PaperOut)
 def mark_opened(paper_id: int, session: SessionDep, user: CurrentUser) -> Paper:
-    stmt = select(Paper).where(Paper.id == paper_id, Paper.user_id == user.id).options(selectinload(Paper.keywords))
+    stmt = (
+        select(Paper)
+        .where(Paper.id == paper_id, Paper.user_id == user.id)
+        .options(selectinload(Paper.keywords))
+    )
     paper = session.exec(stmt).first()
     if paper is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
-    paper.last_opened_at = datetime.utcnow()
-    session.add(paper)
-    session.commit()
-    session.refresh(paper)
-    return paper
-
-
-def _set_keywords(session: Session, paper: Paper, names: list[str]) -> None:
-    for row in session.exec(select(PaperKeyword).where(PaperKeyword.paper_id == paper.id)).all():
-        session.delete(row)
-    session.flush()
-    norm: list[str] = []
-    for raw in names:
-        name = raw.strip().lower()
-        if not name:
-            continue
-        kw = session.exec(select(Keyword).where(Keyword.name == name)).first()
-        if kw is None:
-            kw = Keyword(name=name)
-            session.add(kw)
-            session.flush()
-        session.add(PaperKeyword(paper_id=paper.id, keyword_id=kw.id))
-        norm.append(name)
-    paper.search_document = build_search_document(
-        paper.title,
-        paper.authors,
-        paper.doi,
-        paper.arxiv_id,
-        norm,
-    )
+    return mark_paper_opened(session, paper)
 
 
 @router.patch("/{paper_id}", response_model=PaperOut)
@@ -224,7 +168,11 @@ def patch_paper(
     session: SessionDep,
     user: CurrentUser,
 ) -> Paper:
-    stmt = select(Paper).where(Paper.id == paper_id, Paper.user_id == user.id).options(selectinload(Paper.keywords))
+    stmt = (
+        select(Paper)
+        .where(Paper.id == paper_id, Paper.user_id == user.id)
+        .options(selectinload(Paper.keywords))
+    )
     paper = session.exec(stmt).first()
     if paper is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
@@ -237,16 +185,10 @@ def patch_paper(
     if body.status is not None:
         paper.status = body.status
         if body.status == PaperStatus.completed and old_status != PaperStatus.completed:
-            paper.completed_at = datetime.utcnow()
-            session.add(
-                DailyLog(
-                    paper_id=paper.id,
-                    user_id=user.id,
-                    activity_date=paper.completed_at.date(),
-                )
-            )
+            mark_paper_completed(session, paper, user.id)
+
     if body.keyword_names is not None:
-        _set_keywords(session, paper, body.keyword_names)
+        set_keywords(session, paper, body.keyword_names)
     elif body.title is not None or body.authors is not None:
         kw_rows = session.exec(
             select(Keyword.name)
@@ -264,23 +206,15 @@ def patch_paper(
     session.add(paper)
     session.commit()
     session.refresh(paper)
-    stmt = select(Paper).where(Paper.id == paper.id).options(selectinload(Paper.keywords))
-    return session.exec(stmt).one()
+    return session.exec(
+        select(Paper).where(Paper.id == paper.id).options(selectinload(Paper.keywords))
+    ).one()
 
 
 @router.delete("/{paper_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def delete_paper(paper_id: int, session: SessionDep, user: CurrentUser) -> Response:
-    stmt = select(Paper).where(Paper.id == paper_id, Paper.user_id == user.id)
-    paper = session.exec(stmt).first()
+def delete_paper_endpoint(paper_id: int, session: SessionDep, user: CurrentUser) -> Response:
+    paper = session.exec(select(Paper).where(Paper.id == paper_id, Paper.user_id == user.id)).first()
     if paper is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
-
-    for row in session.exec(select(DailyLog).where(DailyLog.paper_id == paper_id)).all():
-        session.delete(row)
-    for row in session.exec(select(PaperKeyword).where(PaperKeyword.paper_id == paper_id)).all():
-        session.delete(row)
-
-    safe_unlink_file(paper.file_path)
-    session.delete(paper)
-    session.commit()
+    delete_paper(session, paper)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

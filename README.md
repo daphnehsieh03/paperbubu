@@ -2,6 +2,30 @@
 
 Monorepo: **FastAPI + SQLModel + PostgreSQL** (or SQLite for local quickstart) backend, **Next.js (App Router) + Tailwind + TanStack Query** frontend.
 
+## Running the app
+
+Once set up (see below), open two terminal tabs:
+
+**Terminal 1 — Backend**
+```bash
+cd backend
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+**Terminal 2 — Frontend**
+```bash
+cd frontend
+npm run dev
+```
+
+Then open [http://localhost:3000](http://localhost:3000).
+
+- API base: `http://localhost:8000/v1`
+- Health check: `http://localhost:8000/health`
+
+---
+
 ## Prerequisites
 
 - Python 3.11+
@@ -95,3 +119,14 @@ Creates user/db `papertrail` / `papertrail` on port `5432`.
 | POST | `/v1/papers/{id}/open` | Touch `last_opened_at` |
 | GET | `/v1/me/heatmap` | Completion counts by day |
 | GET | `/v1/me/stats` | Totals, keywords, recent lists |
+
+
+User 1
+
+Email: test@paperbubu.com
+Password: testpass123
+
+User 2
+
+Email: daphne@paperbubu.com
+Password: testpass123

@@ -1,7 +1,9 @@
+"""Pure utility functions with no database or HTTP dependencies."""
+
 import json
 from pathlib import Path
 
-from app.models import Keyword, Paper
+from app.models import Paper
 
 
 def authors_to_str(authors: list[str]) -> str:
@@ -23,18 +25,6 @@ def build_search_document(
 
 def keyword_names_for_paper(paper: Paper) -> list[str]:
     return [k.name for k in (paper.keywords or [])]
-
-
-def refresh_search_document(session, paper: Paper) -> None:
-    names = keyword_names_for_paper(paper)
-    paper.search_document = build_search_document(
-        paper.title,
-        paper.authors,
-        paper.doi,
-        paper.arxiv_id,
-        names,
-    )
-    session.add(paper)
 
 
 def safe_unlink_file(path: str | None) -> None:

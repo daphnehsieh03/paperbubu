@@ -2,6 +2,7 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from app.auth_utils import decode_access_token, hash_password, verify_password
@@ -36,7 +37,11 @@ def register(body: RegisterRequest, session: SessionDep, response: Response) -> 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     user = User(email=body.email, password_hash=hash_password(body.password))
     session.add(user)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     session.refresh(user)
     return _issue_session(response, user.id)
 

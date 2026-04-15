@@ -7,6 +7,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import engine, run_migrations
 from app.routers import analytics, auth, papers
+from app.token_store import get_redis
 
 
 def _is_postgres() -> bool:
@@ -15,6 +16,7 @@ def _is_postgres() -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    get_redis().ping()
     run_migrations()
     if _is_postgres():
         with engine.begin() as conn:

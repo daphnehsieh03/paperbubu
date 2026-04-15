@@ -16,7 +16,7 @@ import { useAuth } from "@/lib/auth";
 export default function PaperDetailPage() {
   const params = useParams();
   const id = Number(params.id);
-  const { token } = useAuth();
+  const { token, authReady } = useAuth();
   const qc = useQueryClient();
   const [kwInput, setKwInput] = React.useState("");
 
@@ -55,6 +55,10 @@ export default function PaperDetailPage() {
     if (!token || !Number.isFinite(id)) return;
     markPaperOpen(token, id).catch(() => {});
   }, [token, id]);
+
+  if (!authReady) {
+    return <div className="p-8 text-zinc-600">Loading…</div>;
+  }
 
   if (!token) {
     return (

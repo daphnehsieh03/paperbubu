@@ -30,7 +30,7 @@ function statusLabel(s: PaperStatus) {
 }
 
 export default function HomePage() {
-  const { token, setToken } = useAuth();
+  const { token, authReady, signOut } = useAuth();
   const qc = useQueryClient();
   const [q, setQ] = React.useState("");
   const [debouncedQ, setDebouncedQ] = React.useState("");
@@ -131,6 +131,14 @@ export default function HomePage() {
     return days.map((d) => ({ date: d.date, count: d.count }));
   }, [heatmapQuery.data]);
 
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50 text-zinc-600">
+        Loading…
+      </div>
+    );
+  }
+
   if (!token) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-zinc-50 p-6">
@@ -153,7 +161,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3">
           <h1 className="text-lg font-semibold text-zinc-900">Papertrail</h1>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setToken(null)}>
+            <Button variant="outline" size="sm" onClick={() => void signOut()}>
               Sign out
             </Button>
           </div>

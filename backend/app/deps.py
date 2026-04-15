@@ -6,7 +6,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
-from app.auth_utils import decode_token
+from app.auth_utils import decode_access_token
+from app.token_store import validate_access_in_redis
 from app.db import get_session
 from app.models import User
 
@@ -23,13 +24,15 @@ def get_current_user(
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    user_id = decode_token(creds.credentials)
-    if user_id is None:
+    claims = decode_access_token(creds.credentials)
+    if claims is None or not validate_access_in_redis(
+        claims.user_id, claims.jti, claims.session_version
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
         )
-    user = session.get(User, user_id)
+    user = session.get(User, claims.user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     return user

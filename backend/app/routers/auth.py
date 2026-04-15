@@ -40,6 +40,7 @@ def register(body: RegisterRequest, session: SessionDep, response: Response) -> 
     try:
         session.commit()
     except IntegrityError:
+        # catching the UNIQUE constraint violation error. instead of raising 500, we return a 409
         session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     session.refresh(user)

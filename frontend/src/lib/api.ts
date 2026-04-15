@@ -1,4 +1,6 @@
-const base = () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const apiBase = () => process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+const base = apiBase;
 
 export type PaperStatus = "to_read" | "reading" | "completed";
 
@@ -27,25 +29,55 @@ export type MeStats = {
   recently_opened: Paper[];
 };
 
+type AuthBridge = {
+  getAccessToken: () => string | null;
+  setAccessToken: (t: string | null) => void;
+};
+
+let authBridge: AuthBridge | null = null;
+
+export function configureAuthApi(bridge: AuthBridge) {
+  authBridge = bridge;
+}
+
 function authHeaders(token: string | null): HeadersInit {
   const h: Record<string, string> = {};
   if (token) h.Authorization = `Bearer ${token}`;
   return h;
 }
 
+async function tryRefresh(): Promise<string | null> {
+  const res = await fetch(`${base()}/v1/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { access_token: string };
+  authBridge?.setAccessToken(data.access_token);
+  return data.access_token;
+}
+
 export async function apiJson<T>(
   path: string,
-  opts: RequestInit & { token?: string | null } = {}
+  opts: RequestInit & { token?: string | null } = {},
+  retryAfterRefresh = true
 ): Promise<T> {
   const { token, ...init } = opts;
   const url = `${base()}${path.startsWith("/") ? path : `/${path}`}`;
   const res = await fetch(url, {
     ...init,
+    credentials: "include",
     headers: {
       ...authHeaders(token ?? null),
       ...(init.headers as Record<string, string>),
     },
   });
+  if (res.status === 401 && retryAfterRefresh && token) {
+    const newTok = await tryRefresh();
+    if (newTok) {
+      return apiJson<T>(path, { ...opts, token: newTok }, false);
+    }
+  }
   if (!res.ok) {
     const text = await res.text();
     let message = text || res.statusText;
@@ -83,6 +115,18 @@ export async function login(email: string, password: string) {
   });
 }
 
+export async function logoutSession(token: string | null) {
+  await fetch(`${base()}/v1/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+    headers: { ...authHeaders(token) },
+  });
+}
+
+export async function logoutAllDevices(token: string) {
+  return apiJson<{ ok: boolean }>("/v1/auth/logout-all", { method: "POST", token });
+}
+
 export async function fetchPapers(
   token: string,
   params: { q?: string; status?: PaperStatus } = {}
@@ -108,6 +152,7 @@ export async function uploadPapers(token: string, files: File[]) {
   for (const f of files) fd.append("file", f);
   const res = await fetch(`${base()}/v1/papers`, {
     method: "POST",
+    credentials: "include",
     headers: authHeaders(token),
     body: fd,
   });
@@ -116,7 +161,11 @@ export async function uploadPapers(token: string, files: File[]) {
   return data as Paper | Paper[];
 }
 
-export async function patchPaper(token: string, id: number, body: Partial<{ status: PaperStatus; title: string; keyword_names: string[] }>) {
+export async function patchPaper(
+  token: string,
+  id: number,
+  body: Partial<{ status: PaperStatus; title: string; keyword_names: string[] }>
+) {
   return apiJson<Paper>(`/v1/papers/${id}`, {
     method: "PATCH",
     token,

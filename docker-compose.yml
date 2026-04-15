@@ -1,7 +1,15 @@
-# PostgreSQL for local development. Run API/frontend on the host (see README).
+# PostgreSQL + Redis for local development. Run API/frontend on the host (see README).
 # Connection: postgresql+psycopg://papertrail:papertrail@127.0.0.1:5432/papertrail
+# Redis: redis://127.0.0.1:6379/0
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: papertrail_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
   db:
     image: postgres:16-alpine
     container_name: papertrail_db

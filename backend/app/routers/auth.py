@@ -2,8 +2,9 @@ from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from app.auth_utils import decode_access_token, hash_password, verify_password
 from app.config import settings
@@ -23,6 +24,14 @@ from app.token_store import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer_optional = HTTPBearer(auto_error=False)
 
+
+def _user_for_login(session: Session, identifier: str) -> User | None:
+    if "@" in identifier:
+        key = identifier.lower()
+        return session.exec(select(User).where(func.lower(User.email) == key)).first()
+    return session.exec(select(User).where(User.username == identifier.lower())).first()
+
+
 def _issue_session(response: Response, user_id: int) -> TokenResponse:
     refresh = issue_refresh_token(user_id)
     attach_refresh_cookie(response, refresh)
@@ -32,26 +41,39 @@ def _issue_session(response: Response, user_id: int) -> TokenResponse:
 
 @router.post("/register", response_model=TokenResponse)
 def register(body: RegisterRequest, session: SessionDep, response: Response) -> TokenResponse:
-    existing = session.exec(select(User).where(User.email == body.email)).first()
-    if existing:
+    existing_email = session.exec(select(User).where(User.email == body.email)).first()
+    if existing_email:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    user = User(email=body.email, password_hash=hash_password(body.password))
+    existing_username = session.exec(select(User).where(User.username == body.username)).first()
+    if existing_username:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
+    user = User(
+        email=body.email,
+        username=body.username,
+        password_hash=hash_password(body.password),
+    )
     session.add(user)
     try:
         session.commit()
     except IntegrityError:
         # catching the UNIQUE constraint violation error. instead of raising 500, we return a 409
         session.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email or username already registered",
+        )
     session.refresh(user)
     return _issue_session(response, user.id)
 
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, session: SessionDep, response: Response) -> TokenResponse:
-    user = session.exec(select(User).where(User.email == body.email)).first()
+    user = _user_for_login(session, body.identifier)
     if user is None or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email, username, or password",
+        )
     return _issue_session(response, user.id)
 
 

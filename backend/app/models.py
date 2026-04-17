@@ -4,7 +4,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field as PydanticField
+from pydantic import BaseModel, EmailStr, Field as PydanticField, field_validator
 from sqlalchemy import Column, Enum as SAEnum, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -23,6 +23,7 @@ class User(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
+    username: str = Field(unique=True, index=True)
     password_hash: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -96,12 +97,32 @@ class DailyLog(SQLModel, table=True):
 
 class RegisterRequest(BaseModel):
     email: EmailStr
+    username: str = PydanticField(
+        min_length=3,
+        max_length=32,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+    )
     password: str = PydanticField(min_length=8)
+
+    @field_validator("email")
+    @classmethod
+    def email_lower(cls, v: str) -> str:
+        return v.lower()
+
+    @field_validator("username")
+    @classmethod
+    def username_lower(cls, v: str) -> str:
+        return v.lower()
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    identifier: str = PydanticField(min_length=1)
     password: str
+
+    @field_validator("identifier")
+    @classmethod
+    def strip_identifier(cls, v: str) -> str:
+        return v.strip()
 
 
 class TokenResponse(BaseModel):

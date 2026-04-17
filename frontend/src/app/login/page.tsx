@@ -13,7 +13,9 @@ import { useAuth } from "@/lib/auth";
 export default function LoginPage() {
   const { setToken } = useAuth();
   const router = useRouter();
+  const [identifier, setIdentifier] = React.useState("");
   const [email, setEmail] = React.useState("");
+  const [username, setUsername] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [mode, setMode] = React.useState<"login" | "register">("login");
   const [error, setError] = React.useState<string | null>(null);
@@ -24,9 +26,13 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const fn = mode === "login" ? login : register;
-      const { access_token } = await fn(email, password);
-      setToken(access_token);
+      if (mode === "login") {
+        const { access_token } = await login(identifier.trim(), password);
+        setToken(access_token);
+      } else {
+        const { access_token } = await register(email.trim(), username.trim(), password);
+        setToken(access_token);
+      }
       router.push("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
@@ -44,17 +50,49 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
+            {mode === "login" ? (
+              <div className="space-y-2">
+                <Label htmlFor="identifier">Email or username</Label>
+                <Input
+                  id="identifier"
+                  type="text"
+                  autoComplete="username"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  required
+                />
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="username">Username</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    minLength={3}
+                    maxLength={32}
+                    pattern="[a-zA-Z0-9_-]+"
+                    title="Letters, numbers, underscores, and hyphens only"
+                    required
+                  />
+                  <p className="text-xs text-zinc-500">3–32 characters: letters, numbers, _, -</p>
+                </div>
+              </>
+            )}
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
               <Input

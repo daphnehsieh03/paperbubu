@@ -99,19 +99,19 @@ export async function apiJson<T>(
   return res.json() as Promise<T>;
 }
 
-export async function register(email: string, password: string) {
+export async function register(email: string, username: string, password: string) {
   return apiJson<{ access_token: string }>("/v1/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, username, password }),
   });
 }
 
-export async function login(email: string, password: string) {
+export async function login(identifier: string, password: string) {
   return apiJson<{ access_token: string }>("/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ identifier, password }),
   });
 }
 

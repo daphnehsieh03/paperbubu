@@ -19,5 +19,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: Literal["lax", "strict", "none"] = "lax"
 
+    # PubMed E-utilities API key (optional but recommended for higher rate limits).
+    # Without a key: 3 req/s.  With a key: 10 req/s.
+    # Register for free at: https://www.ncbi.nlm.nih.gov/account/
+    pubmed_api_key: str = ""
+
 
 settings = Settings()

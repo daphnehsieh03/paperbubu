@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.db import engine, run_migrations
-from app.routers import analytics, auth, papers
+from app.routers import analytics, auth, discover, papers
 from app.token_store import get_redis
 
 
@@ -44,6 +44,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/v1")
 app.include_router(papers.router, prefix="/v1")
 app.include_router(analytics.router, prefix="/v1")
+app.include_router(discover.router, prefix="/v1")
 
 
 @app.get("/health")

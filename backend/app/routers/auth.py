@@ -1,3 +1,4 @@
+import re
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -9,7 +10,7 @@ from sqlmodel import Session, select
 from app.auth_utils import decode_access_token, hash_password, verify_password
 from app.config import settings
 from app.deps import CurrentUser, SessionDep
-from app.models import LoginRequest, RegisterRequest, TokenResponse, User
+from app.models import TokenResponse, User
 from app.token_store import (
     attach_refresh_cookie,
     clear_refresh_cookie,
@@ -23,6 +24,9 @@ from app.token_store import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 bearer_optional = HTTPBearer(auto_error=False)
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,32}$")
 
 
 def _user_for_login(session: Session, identifier: str) -> User | None:
@@ -40,17 +44,51 @@ def _issue_session(response: Response, user_id: int) -> TokenResponse:
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(body: RegisterRequest, session: SessionDep, response: Response) -> TokenResponse:
-    existing_email = session.exec(select(User).where(User.email == body.email)).first()
+async def register(request: Request, session: SessionDep, response: Response) -> TokenResponse:
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must be a JSON object")
+
+    # --- email ---
+    email = raw.get("email")
+    if not isinstance(email, str) or not email.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="email is required")
+    email = email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="email is not a valid email address")
+
+    # --- username ---
+    username = raw.get("username")
+    if not isinstance(username, str) or not username.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="username is required")
+    username = username.strip().lower()
+    if not _USERNAME_RE.match(username):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="username must be 3–32 characters and contain only letters, digits, underscores, or hyphens",
+        )
+
+    # --- password ---
+    password = raw.get("password")
+    if not isinstance(password, str):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="password is required")
+    if len(password) < 8:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="password must be at least 8 characters")
+
+    existing_email = session.exec(select(User).where(User.email == email)).first()
     if existing_email:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    existing_username = session.exec(select(User).where(User.username == body.username)).first()
+    existing_username = session.exec(select(User).where(User.username == username)).first()
     if existing_username:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
     user = User(
-        email=body.email,
-        username=body.username,
-        password_hash=hash_password(body.password),
+        email=email,
+        username=username,
+        password_hash=hash_password(password),
     )
     session.add(user)
     try:
@@ -67,9 +105,28 @@ def register(body: RegisterRequest, session: SessionDep, response: Response) -> 
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, session: SessionDep, response: Response) -> TokenResponse:
-    user = _user_for_login(session, body.identifier)
-    if user is None or not verify_password(body.password, user.password_hash):
+async def login(request: Request, session: SessionDep, response: Response) -> TokenResponse:
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must be a JSON object")
+
+    # --- identifier (email or username) ---
+    identifier = raw.get("identifier")
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="identifier is required")
+    identifier = identifier.strip()
+
+    # --- password ---
+    password = raw.get("password")
+    if not isinstance(password, str) or not password:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="password is required")
+
+    user = _user_for_login(session, identifier)
+    if user is None or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email, username, or password",

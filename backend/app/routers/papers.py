@@ -10,7 +10,7 @@ from sqlmodel import col, select
 
 from app.config import settings
 from app.deps import CurrentUser, SessionDep
-from app.models import CreatePaperUrlBody, Keyword, Paper, PaperKeyword, PaperOut, PaperPatch, PaperStatus
+from app.models import Keyword, Paper, PaperKeyword, PaperOut, PaperStatus
 from app.services.metadata import parse_ids_from_url, resolve_metadata
 from app.services.paper_helpers import authors_to_str, build_search_document
 from app.services.papers import (
@@ -59,8 +59,17 @@ async def create_paper_endpoint(
     content_type = request.headers.get("content-type", "")
 
     if content_type.startswith("application/json"):
-        body = CreatePaperUrlBody.model_validate(await request.json())
-        doi, arxiv_id = parse_ids_from_url(body.url)
+        try:
+            raw = await request.json()
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must be a JSON object")
+        url = raw.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="url is required")
+        url = url.strip()
+        doi, arxiv_id = parse_ids_from_url(url)
         if not doi and not arxiv_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -162,13 +171,56 @@ def mark_opened(paper_id: int, session: SessionDep, user: CurrentUser) -> Paper:
     return mark_paper_opened(session, paper)
 
 
+_VALID_STATUSES = {"to_read", "reading", "completed"}
+
+
 @router.patch("/{paper_id}", response_model=PaperOut)
-def patch_paper(
+async def patch_paper(
     paper_id: int,
-    body: PaperPatch,
+    request: Request,
     session: SessionDep,
     user: CurrentUser,
 ) -> Paper:
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must be a JSON object")
+
+    # --- optional title ---
+    title: str | None = None
+    if "title" in raw:
+        if not isinstance(raw["title"], str) or not raw["title"].strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="title must be a non-empty string")
+        title = raw["title"].strip()
+
+    # --- optional authors ---
+    authors: str | None = None
+    if "authors" in raw:
+        if not isinstance(raw["authors"], str):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="authors must be a string")
+        authors = raw["authors"]
+
+    # --- optional status ---
+    new_status: PaperStatus | None = None
+    if "status" in raw:
+        if raw["status"] not in _VALID_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"status must be one of: {', '.join(sorted(_VALID_STATUSES))}",
+            )
+        new_status = PaperStatus(raw["status"])
+
+    # --- optional keyword_names ---
+    keyword_names: list[str] | None = None
+    if "keyword_names" in raw:
+        kn = raw["keyword_names"]
+        if not isinstance(kn, list) or not all(isinstance(k, str) for k in kn):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="keyword_names must be a list of strings")
+        keyword_names = [k.strip() for k in kn if k.strip()]
+
     stmt = (
         select(Paper)
         .where(Paper.id == paper_id, Paper.user_id == user.id)
@@ -179,18 +231,18 @@ def patch_paper(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
 
     old_status = paper.status
-    if body.title is not None:
-        paper.title = body.title
-    if body.authors is not None:
-        paper.authors = body.authors
-    if body.status is not None:
-        paper.status = body.status
-        if body.status == PaperStatus.completed and old_status != PaperStatus.completed:
+    if title is not None:
+        paper.title = title
+    if authors is not None:
+        paper.authors = authors
+    if new_status is not None:
+        paper.status = new_status
+        if new_status == PaperStatus.completed and old_status != PaperStatus.completed:
             mark_paper_completed(session, paper, user.id)
 
-    if body.keyword_names is not None:
-        set_keywords(session, paper, body.keyword_names)
-    elif body.title is not None or body.authors is not None:
+    if keyword_names is not None:
+        set_keywords(session, paper, keyword_names)
+    elif title is not None or authors is not None:
         kw_rows = session.exec(
             select(Keyword.name)
             .join(PaperKeyword, PaperKeyword.keyword_id == Keyword.id)

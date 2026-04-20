@@ -1,10 +1,15 @@
-"""SQLModel table models and Pydantic API payloads in one module (SQLModel-friendly)."""
+"""SQLModel table models and Pydantic response models.
+
+Request body validation is handled manually in each router — there are no
+Pydantic BaseModel subclasses used as FastAPI request body parameters here.
+Response models (output serialization) still use Pydantic BaseModel.
+"""
 
 from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field as PydanticField, field_validator
+from pydantic import BaseModel
 from sqlalchemy import Column, Enum as SAEnum, Text, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -95,43 +100,9 @@ class DailyLog(SQLModel, table=True):
 # --- API-only Pydantic models (no table=True) ---
 
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    username: str = PydanticField(
-        min_length=3,
-        max_length=32,
-        pattern=r"^[a-zA-Z0-9_-]+$",
-    )
-    password: str = PydanticField(min_length=8)
-
-    @field_validator("email")
-    @classmethod
-    def email_lower(cls, v: str) -> str:
-        return v.lower()
-
-    @field_validator("username")
-    @classmethod
-    def username_lower(cls, v: str) -> str:
-        return v.lower()
-
-
-class LoginRequest(BaseModel):
-    identifier: str = PydanticField(min_length=1)
-    password: str
-
-    @field_validator("identifier")
-    @classmethod
-    def strip_identifier(cls, v: str) -> str:
-        return v.strip()
-
-
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-
-
-class CreatePaperUrlBody(BaseModel):
-    url: str
 
 
 class PaperKeywordOut(BaseModel):
@@ -156,13 +127,6 @@ class PaperOut(BaseModel):
     keywords: list[PaperKeywordOut] = []
 
     model_config = {"from_attributes": True}
-
-
-class PaperPatch(BaseModel):
-    title: Optional[str] = None
-    authors: Optional[str] = None
-    status: Optional[PaperStatus] = None
-    keyword_names: Optional[list[str]] = None
 
 
 class HeatmapDay(BaseModel):
@@ -214,7 +178,3 @@ class DiscoverResponse(BaseModel):
     results: list[PaperDiscoverResult]
 
 
-class PubMedImportBody(BaseModel):
-    """Request body for POST /discover/import — import a discovered paper by PMID."""
-
-    pmid: str

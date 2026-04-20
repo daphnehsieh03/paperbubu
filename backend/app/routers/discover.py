@@ -22,18 +22,16 @@ The import step is the explicit user action that bridges discovery → library.
 
 from __future__ import annotations
 
-import json
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from app.config import settings
 from app.deps import CurrentUser, SessionDep
 from app.models import (
     DiscoverResponse,
+    Paper,
     PaperDiscoverResult,
     PaperOut,
-    PubMedImportBody,
-    Paper,
 )
 from app.services.discover import doi_set_for_user, pmid_set_for_user
 from app.services.paper_helpers import authors_to_str
@@ -142,7 +140,7 @@ async def search_papers(
 
 @router.post("/import", response_model=PaperOut, status_code=status.HTTP_201_CREATED)
 async def import_paper(
-    body: PubMedImportBody,
+    request: Request,
     session: SessionDep,
     user: CurrentUser,
 ) -> Paper:
@@ -156,7 +154,18 @@ async def import_paper(
         can detect it without a separate DB column
       - file_path = None (no PDF yet; user can upload separately)
     """
-    pmid = body.pmid.strip()
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request body must be a JSON object")
+
+    pmid_raw = raw.get("pmid")
+    if not isinstance(pmid_raw, str) or not pmid_raw.strip():
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="pmid is required")
+    pmid = pmid_raw.strip()
 
     # Guard: already in library?
     existing_pmids = pmid_set_for_user(session, user.id)

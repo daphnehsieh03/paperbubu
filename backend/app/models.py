@@ -180,3 +180,41 @@ class MeStatsResponse(BaseModel):
     top_keywords: list[dict]
     recently_read: list[PaperOut]
     recently_opened: list[PaperOut]
+
+
+# --- PubMed discovery models (no table=True — never persisted directly) ---
+
+
+class PaperDiscoverResult(BaseModel):
+    """A single paper returned from an external discovery source (e.g. PubMed).
+
+    This is never written to the database by the search endpoint.
+    The import endpoint turns one of these into a Paper row.
+    """
+
+    source: str = "pubmed"
+    external_id: str                  # PMID for PubMed
+    title: str
+    authors: list[str]
+    abstract: Optional[str] = None
+    journal: Optional[str] = None
+    published_date: Optional[str] = None   # "YYYY" or "YYYY-MM"
+    doi: Optional[str] = None
+    doi_url: Optional[str] = None     # https://doi.org/{doi} — publisher landing page
+    pmc_url: Optional[str] = None     # PMC full-text URL if open-access copy exists
+    pubmed_url: Optional[str] = None  # PubMed abstract page
+    in_library: bool = False          # True when the user already has this paper
+
+
+class DiscoverResponse(BaseModel):
+    query: str
+    source: str
+    total: int                        # full PubMed result count (may be >> len(results))
+    offset: int
+    results: list[PaperDiscoverResult]
+
+
+class PubMedImportBody(BaseModel):
+    """Request body for POST /discover/import — import a discovered paper by PMID."""
+
+    pmid: str

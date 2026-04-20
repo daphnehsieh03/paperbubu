@@ -21,6 +21,7 @@ from app.services.papers import (
     set_keywords,
 )
 from app.services.pdf import extract_ids_from_pdf
+from app.services.pdf_fetch import fetch_and_store_pdf
 
 router = APIRouter(prefix="/papers", tags=["papers"])
 
@@ -206,6 +207,55 @@ def patch_paper(
     session.add(paper)
     session.commit()
     session.refresh(paper)
+    return session.exec(
+        select(Paper).where(Paper.id == paper.id).options(selectinload(Paper.keywords))
+    ).one()
+
+
+@router.post("/{paper_id}/fetch-pdf", response_model=PaperOut)
+async def fetch_paper_pdf(paper_id: int, session: SessionDep, user: CurrentUser) -> Paper:
+    """Auto-download the PDF for an open-access paper and attach it to the library entry.
+
+    Works for:
+      - arXiv papers  (arxiv_id is a bare arXiv identifier)
+      - PubMed papers that have a PMC full-text copy (arxiv_id = "pmid:{pmid}")
+
+    Returns 409 if a PDF is already attached.
+    Returns 422 if the paper has no fetchable source.
+    Returns 502 if the remote server fails or returns a non-PDF response.
+    """
+    stmt = (
+        select(Paper)
+        .where(Paper.id == paper_id, Paper.user_id == user.id)
+        .options(selectinload(Paper.keywords))
+    )
+    paper = session.exec(stmt).first()
+    if paper is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Paper not found")
+
+    if paper.file_path:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A PDF is already attached to this paper. Delete it first or upload a replacement.",
+        )
+
+    try:
+        file_path = await fetch_and_store_pdf(
+            arxiv_id=paper.arxiv_id,
+            upload_dir=settings.upload_dir,
+            api_key=settings.pubmed_api_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch PDF: {exc}",
+        )
+
+    paper.file_path = file_path
+    session.add(paper)
+    session.commit()
     return session.exec(
         select(Paper).where(Paper.id == paper.id).options(selectinload(Paper.keywords))
     ).one()

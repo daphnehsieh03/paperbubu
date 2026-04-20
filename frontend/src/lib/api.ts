@@ -189,3 +189,55 @@ export async function fetchHeatmap(token: string) {
 export async function fetchStats(token: string) {
   return apiJson<MeStats>("/v1/me/stats", { token });
 }
+
+// ── PubMed discovery ───────────────────────────────────────────────────────
+
+export type DiscoverResult = {
+  source: string;
+  external_id: string; // PMID
+  title: string;
+  authors: string[];
+  abstract: string | null;
+  journal: string | null;
+  published_date: string | null;
+  doi: string | null;
+  doi_url: string | null;   // https://doi.org/{doi} — publisher landing page
+  pmc_url: string | null;   // PMC full text if open-access copy exists
+  pubmed_url: string | null;
+  in_library: boolean;
+};
+
+export type DiscoverResponse = {
+  query: string;
+  source: string;
+  total: number;
+  offset: number;
+  results: DiscoverResult[];
+};
+
+export async function searchDiscover(
+  token: string,
+  q: string,
+  limit = 20,
+  offset = 0
+): Promise<DiscoverResponse> {
+  const sp = new URLSearchParams({
+    q,
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return apiJson<DiscoverResponse>(`/v1/discover?${sp}`, { token });
+}
+
+export async function importPubMedPaper(token: string, pmid: string): Promise<Paper> {
+  return apiJson<Paper>("/v1/discover/import", {
+    method: "POST",
+    token,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pmid }),
+  });
+}
+
+export async function fetchPaperPdf(token: string, id: number): Promise<Paper> {
+  return apiJson<Paper>(`/v1/papers/${id}/fetch-pdf`, { method: "POST", token });
+}
